@@ -195,18 +195,6 @@ NODE_ENV=development
 
 3. **Platform-Specific Instructions**
    
-   **Heroku:**
-   ```bash
-   # Install Heroku CLI and login
-   heroku create your-app-name
-   heroku addons:create heroku-postgresql:hobby-dev
-   heroku config:set NODE_ENV=production
-   heroku config:set DB_USER=your_db_user
-   heroku config:set DB_PASSWORD=your_db_password
-   # Add other environment variables
-   git push heroku main
-   ```
-
    **Railway/Render:**
    - Connect your GitHub repository
    - Set environment variables in the platform dashboard
