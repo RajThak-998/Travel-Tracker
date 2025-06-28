@@ -7,18 +7,28 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
-const db = new pg.Client({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
-});
+let db;
+
+// Use DATABASE_URL (from Railway) if available, otherwise local development vars
+if (process.env.DATABASE_URL) {
+  db = new pg.Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },  // For Railway's managed PostgreSQL
+  });
+} else {
+  db = new pg.Client({
+    user: process.env.DB_USER,
+    host: process.env.DB_HOST,
+    database: process.env.DB_NAME,
+    password: process.env.DB_PASSWORD,
+    port: process.env.DB_PORT,
+  });
+}
 
 // Connect to database
-db.connect();
+db.connect().then(() => console.log("Connected to PostgreSQL")).catch(err => console.error("DB connection error:", err));
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static("public"));
@@ -27,21 +37,20 @@ app.use(express.static("public"));
 let users = [];
 let currentUserId = null;
 
-// Function to load all users from database
+// Load users from database
 async function loadUsers() {
   try {
     const result = await db.query("SELECT * FROM users ORDER BY id");
     users = result.rows;
     console.log("Loaded users:", users);
-    
-    // Set currentUserId to first user if not set
+
     if (users.length > 0 && !currentUserId) {
       currentUserId = users[0].id;
       console.log("Set currentUserId to:", currentUserId);
     }
   } catch (err) {
-    console.log("Error loading users:", err);
-    // Fallback to default users if database query fails
+    console.error("Error loading users:", err);
+    // Fallback dummy users for testing
     users = [
       { id: 1, name: "Angela", color: "teal" },
       { id: 2, name: "Jack", color: "powderblue" },
@@ -50,34 +59,26 @@ async function loadUsers() {
   }
 }
 
-// Function to get visited countries for current user
+// Get visited countries
 async function checkVisitedCountries(userId) {
   try {
     const result = await db.query(
       "SELECT country_code FROM visited_countries WHERE user_id = $1",
       [userId]
     );
-
-    let countries = [];
-    result.rows.forEach((country) => {
-      countries.push(country.country_code);
-    });
-    console.log(`Countries for user ${userId}:`, countries);
-    return countries;
+    return result.rows.map(row => row.country_code);
   } catch (err) {
-    console.log("Error checking visited countries:", err);
+    console.error("Error fetching countries:", err);
     return [];
   }
 }
 
-// Function to get current user object
+// Get current user
 function getCurrentUser() {
-  const user = users.find((user) => user.id === currentUserId);
-  console.log("Current user:", user);
-  return user;
+  return users.find(user => user.id === currentUserId);
 }
 
-// Initialize application
+// Initialize app (load users)
 await loadUsers();
 
 // Routes
@@ -86,22 +87,15 @@ app.get("/", async (req, res) => {
     const countries = await checkVisitedCountries(currentUserId);
     const currentUser = getCurrentUser();
 
-    console.log("Rendering page with:", {
-      countriesCount: countries.length,
-      currentUserId,
-      currentUserColor: currentUser?.color,
-      totalUsers: users.length
-    });
-
     res.render("index.ejs", {
-      countries: countries,
+      countries,
       total: countries.length,
-      users: users,
+      users,
       color: currentUser ? currentUser.color : "teal",
     });
   } catch (err) {
-    console.log("Error in home route:", err);
-    res.status(500).send("Server error");
+    console.error("Home route error:", err);
+    res.status(500).send("Server Error");
   }
 });
 
@@ -110,45 +104,39 @@ app.post("/add", async (req, res) => {
   const currentUser = getCurrentUser();
 
   try {
-    // Find country by name
     const result = await db.query(
       "SELECT country_code FROM countries WHERE LOWER(country_name) LIKE '%' || $1 || '%';",
       [input.toLowerCase()]
     );
 
-    if (result.rows.length === 0) {
-      throw new Error("Country not found");
-    }
+    if (result.rows.length === 0) throw new Error("Country not found");
 
-    const data = result.rows[0];
-    const countryCode = data.country_code;
+    const countryCode = result.rows[0].country_code;
 
     try {
-      // Add country to visited countries
       await db.query(
         "INSERT INTO visited_countries (country_code, user_id) VALUES ($1, $2)",
         [countryCode, currentUserId]
       );
-      console.log(`Added ${countryCode} for user ${currentUserId}`);
       res.redirect("/");
     } catch (err) {
-      console.log("Country already added:", err);
+      console.error("Duplicate country error:", err);
       const countries = await checkVisitedCountries(currentUserId);
       res.render("index.ejs", {
-        countries: countries,
+        countries,
         total: countries.length,
-        users: users,
+        users,
         color: currentUser ? currentUser.color : "teal",
-        error: "Country has already been added, try again.",
+        error: "Country already added, try again.",
       });
     }
   } catch (err) {
-    console.log("Country lookup error:", err);
+    console.error("Country lookup error:", err);
     const countries = await checkVisitedCountries(currentUserId);
     res.render("index.ejs", {
-      countries: countries,
+      countries,
       total: countries.length,
-      users: users,
+      users,
       color: currentUser ? currentUser.color : "teal",
       error: "Country name does not exist, try again.",
     });
@@ -160,49 +148,39 @@ app.post("/user", async (req, res) => {
     res.render("new.ejs");
   } else {
     const selectedUserId = parseInt(req.body.user);
-    console.log("Switching to user:", selectedUserId);
-    
-    // Validate that the user exists in our users array
     const userExists = users.find(user => user.id === selectedUserId);
+
     if (userExists) {
       currentUserId = selectedUserId;
-      console.log("Successfully switched to user:", currentUserId);
+      console.log("Switched to user:", currentUserId);
     } else {
-      console.log("User not found:", selectedUserId);
+      console.error("User not found:", selectedUserId);
     }
     res.redirect("/");
   }
 });
 
 app.post("/new", async (req, res) => {
-  const name = req.body.name;
-  const color = req.body.color;
+  const { name, color } = req.body;
 
   try {
-    console.log("Creating new user:", { name, color });
-    
     const result = await db.query(
-      "INSERT INTO users (name, color) VALUES($1, $2) RETURNING *;",
+      "INSERT INTO users (name, color) VALUES ($1, $2) RETURNING *;",
       [name, color]
     );
 
     const newUser = result.rows[0];
-    console.log("New user created:", newUser);
-
-    // Set current user to the newly created user
     currentUserId = newUser.id;
-
-    // Reload users from database to include the new user
     await loadUsers();
-    
-    console.log("User creation complete, currentUserId:", currentUserId);
+
     res.redirect("/");
   } catch (err) {
-    console.log("Error creating user:", err);
+    console.error("Error creating user:", err);
     res.status(500).send("Error creating user");
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}`);
+// Start server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
